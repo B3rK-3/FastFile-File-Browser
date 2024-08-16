@@ -1,6 +1,6 @@
 #include <chrono>
-#include <cstdio>
 #include <filesystem>
+#include <fstream>
 #include <iostream>
 #include <mutex>
 #include <regex>
@@ -15,40 +15,28 @@
 using namespace std;
 namespace fs = std::filesystem;
 namespace rj = rapidjson;
+
 void helper(const vector<fs::path> &dirs);
-void indexer(const fs::directory_entry &ent);
+void indexer(const fs::directory_entry &ent, rj::Document *extensionData, rj::Document *filenameData, rj::Document::AllocatorType &extensionDataAllocator, rj::Document::AllocatorType &filenameDataAllocator);
+void writeBuffer();
 
 std::mutex data_mutex;
 std::mutex count_mutex;
+std::mutex indexer_mutex;
 const long MAX_COUNT = 50000;
-const int MAX_THREADS = 4;
-const int MaxSubFolderInMemory = 20000;
+const int MAX_THREADS = 16;
+const int MaxSubFolderInMemory = 50000;
 int COUNT = 0;
 
-rj::Document fileData;
-rj::Document extData;
-rj::Document::AllocatorType &fileDataAllocator = fileData.GetAllocator();
-rj::Document::AllocatorType &extDataAllocator = extData.GetAllocator();
-// Convert fileData to a string and write to file
-rj::StringBuffer fileDataBuffer;
-rj::Writer<rj::StringBuffer> fileWriter(fileDataBuffer);  // Compact writing
-// Convert extData to a string and write to file as one block
-rj::StringBuffer extDataBuffer;
-rj::Writer<rj::StringBuffer> extWriter(extDataBuffer);  // Compact writing
-FILE *jsonFile = fopen("../fileIndex.json", "w+");
-FILE *extFile = fopen("../extIndex.json", "w+");
+vector<fs::directory_entry> filesNFolders;
 
 int main() {
-    fileData.SetObject();
-    extData.SetObject();
-
     try {
         fs::path root_path = R"(C:\)";
         vector<fs::path> initial_dirs;
 
         // Get the initial set of directories at the root level
         for (const auto &entry : fs::directory_iterator(root_path)) {
-            indexer(entry);
             if (fs::is_directory(entry.status())) {
                 initial_dirs.push_back(entry.path());
             }
@@ -72,6 +60,7 @@ int main() {
         for (auto &t : threads) {
             t.join();
         }
+        writeBuffer();
         // For testing purposes
         chrono::steady_clock::time_point end = chrono::steady_clock::now();
         cout << "File Count: " << COUNT << endl;
@@ -79,15 +68,6 @@ int main() {
              << chrono::duration_cast<chrono::microseconds>(end - begin).count() /
                     1000000.0
              << " seconds" << endl;
-
-        fileData.Accept(fileWriter);
-        fprintf(jsonFile, fileDataBuffer.GetString());
-
-        extData.Accept(extWriter);
-        fprintf(extFile, extDataBuffer.GetString());
-
-        fclose(extFile);
-        fclose(jsonFile);
     } catch (const fs::filesystem_error &e) {
         cerr << "Filesystem error: " << e.what() << endl;
     } catch (const std::exception &e) {
@@ -95,6 +75,7 @@ int main() {
     }
     return 0;
 }
+
 void helper(const vector<fs::path> &dirs) {
     int fileNFolderCount = 0;
     for (const auto &dir : dirs) {
@@ -107,19 +88,19 @@ void helper(const vector<fs::path> &dirs) {
 
             try {
                 for (const auto &entry : fs::directory_iterator(current_dir)) {
-                    indexer(entry);
+                    std::lock_guard<std::mutex> guard(data_mutex);
+                    filesNFolders.push_back(entry);
                     fileNFolderCount++;
-                    if (fileNFolderCount == MaxSubFolderInMemory) {
+                    if (fileNFolderCount >= MaxSubFolderInMemory) {
                         fileNFolderCount = 0;
+                        writeBuffer();
                     }
+                    if (COUNT >= MAX_COUNT) {
+                        return;
+                    }
+
                     if (fs::is_directory(entry.status())) {
-                        {
-                            std::lock_guard<std::mutex> guard(count_mutex);
-                            if (COUNT >= MAX_COUNT) {
-                                return;
-                            }
-                            COUNT++;
-                        }
+                        COUNT++;
                         stack.push_back(entry.path());
                     }
                 }
@@ -129,15 +110,16 @@ void helper(const vector<fs::path> &dirs) {
         }
     }
 }
-void indexer(const fs::directory_entry &ent) {
+
+void indexer(const fs::directory_entry &ent, rj::Document *extensionData, rj::Document *filenameData, rj::Document::AllocatorType &extensionDataAllocator, rj::Document::AllocatorType &filenameDataAllocator) {
+    std::lock_guard<std::mutex> guard(indexer_mutex);
     const string &path = ent.path().string();
     string fileName = path.substr(path.find_last_of('\\') + 1);
     rj::Value *loc_data;
     int ix = fileName.find_last_of('.');
-    std::lock_guard<std::mutex> guard(data_mutex);  // Lock the mutex to protect DATA
 
     if (!fs::is_directory(ent.status()) && ix != string::npos) {
-        loc_data = &extData;
+        loc_data = extensionData;
 
         for (int i = ix + 1; i < fileName.size(); i++) {
             string chr(1, fileName[i]);
@@ -145,20 +127,20 @@ void indexer(const fs::directory_entry &ent) {
                 continue;
             }
             if (!loc_data->HasMember(chr.c_str())) {
-                loc_data->AddMember(rj::Value(chr.c_str(), extDataAllocator), rj::Value(rj::kObjectType), extDataAllocator);
+                loc_data->AddMember(rj::Value(chr.c_str(), extensionDataAllocator), rj::Value(rj::kObjectType), extensionDataAllocator);
             }
             loc_data = &(*loc_data)[chr.c_str()];  // Update loc_data to point to the nested object
             if (i == fileName.size() - 1) {
                 if (!loc_data->HasMember("END")) {
                     rj::Value endArray(rj::kArrayType);
-                    loc_data->AddMember("END", endArray, extDataAllocator);
+                    loc_data->AddMember("END", endArray, extensionDataAllocator);
                 }
-                loc_data->FindMember("END")->value.PushBack(rj::Value().SetString(path.c_str(), extDataAllocator), extDataAllocator);  // Modify DATA directly
+                loc_data->FindMember("END")->value.PushBack(rj::Value().SetString(path.c_str(), extensionDataAllocator), extensionDataAllocator);  // Modify DATA directly
             }
         }
     }
     fileName = fileName.substr(0, ix);
-    loc_data = &fileData;  // Use a pointer to json to modify DATA directly
+    loc_data = filenameData;  // Use a pointer to json to modify DATA directly
 
     for (int i = 0; i < fileName.size(); i++) {
         if (!isalnum(fileName[i])) {
@@ -166,15 +148,117 @@ void indexer(const fs::directory_entry &ent) {
         }
         string chr(1, tolower(fileName[i]));
         if (!loc_data->HasMember(chr.c_str())) {
-            loc_data->AddMember(rj::Value(chr.c_str(), fileDataAllocator), rj::Value(rj::kObjectType), fileDataAllocator);
+            loc_data->AddMember(rj::Value(chr.c_str(), filenameDataAllocator), rj::Value(rj::kObjectType), filenameDataAllocator);
         }
         loc_data = &((*loc_data)[chr.c_str()]);  // Update loc_data to point to the nested object
         if (i == fileName.size() - 1) {
             if (!loc_data->HasMember("END")) {
                 rj::Value endArray(rj::kArrayType);
-                loc_data->AddMember("END", endArray, fileDataAllocator);
+                loc_data->AddMember("END", endArray, filenameDataAllocator);
             }
-            loc_data->FindMember("END")->value.PushBack(rj::Value().SetString(path.c_str(), fileDataAllocator), fileDataAllocator);  // Modify DATA directly
+            loc_data->FindMember("END")->value.PushBack(rj::Value().SetString(path.c_str(), filenameDataAllocator), filenameDataAllocator);  // Modify DATA directly
         }
     }
+}
+void writeBuffer() {
+    // Debug print to trace execution
+    cout << "Entering writeBuffer" << endl;
+
+    // Lock the mutex (if necessary, ensure no deadlock)
+    if (count_mutex.try_lock()) {
+        cout << "Mutex locked successfully" << endl;
+    } else {
+        cerr << "Failed to lock mutex" << endl;
+        return;
+    }
+
+    // Open files in read mode
+    ifstream filenameJson("../fileIndex.json", ios::in | ios::binary);
+    ifstream extensionJson("../extIndex.json", ios::in | ios::binary);
+
+    if (!filenameJson.is_open() || !extensionJson.is_open()) {
+        std::cerr << "Error opening files for reading!" << std::endl;
+        count_mutex.unlock();
+        return;
+    }
+
+    rj::Document extensionData;
+    rj::Document filenameData;
+
+    rj::Document::AllocatorType &filenameDataAllocator = filenameData.GetAllocator();
+    rj::Document::AllocatorType &extensionDataAllocator = extensionData.GetAllocator();
+
+    // Read and parse existing extensionJson
+    string extJsonContent((istreambuf_iterator<char>(extensionJson)), istreambuf_iterator<char>());
+    if (!extJsonContent.empty()) {
+        rj::ParseResult extParseResult = extensionData.Parse(extJsonContent.c_str());
+        if (!extParseResult) {
+            std::cerr << "Error parsing extensionJson: " << rj::GetParseErrorFunc(extParseResult.Code())
+                      << " at offset " << extParseResult.Offset() << std::endl;
+            count_mutex.unlock();
+            return;
+        }
+    } else {
+        extensionData.SetObject();
+    }
+
+    // Read and parse existing filenameJson
+    string fileJsonContent((istreambuf_iterator<char>(filenameJson)), istreambuf_iterator<char>());
+    if (!fileJsonContent.empty()) {
+        rj::ParseResult fileParseResult = filenameData.Parse(fileJsonContent.c_str());
+        if (!fileParseResult) {
+            std::cerr << "Error parsing filenameJson: " << rj::GetParseErrorFunc(fileParseResult.Code())
+                      << " at offset " << fileParseResult.Offset() << std::endl;
+            count_mutex.unlock();
+            return;
+        }
+    } else {
+        filenameData.SetObject();
+    }
+
+    filenameJson.close();
+    extensionJson.close();
+
+    // Process the files and folders and merge into existing data
+    for (fs::directory_entry &each : filesNFolders) {
+        indexer(each, &extensionData, &filenameData, extensionDataAllocator, filenameDataAllocator);
+    }
+
+    // Open files in write mode (clear the content)
+    ofstream outFileFilename("../fileIndex.json", ios::out | ios::trunc | ios::binary);
+    ofstream outFileExtension("../extIndex.json", ios::out | ios::trunc | ios::binary);
+
+    if (!outFileFilename.is_open() || !outFileExtension.is_open()) {
+        std::cerr << "Error opening files for writing!" << std::endl;
+        count_mutex.unlock();
+        return;
+    }
+
+    // Write the updated JSON data back to the files
+    {
+        rj::StringBuffer filenameBuffer;
+        rj::Writer<rj::StringBuffer> writer1(filenameBuffer);
+        filenameData.Accept(writer1);
+        outFileFilename.write(filenameBuffer.GetString(), filenameBuffer.GetSize());
+    }
+
+    {
+        rj::StringBuffer extensionBuffer;
+        rj::Writer<rj::StringBuffer> writer2(extensionBuffer);
+        extensionData.Accept(writer2);
+        outFileExtension.write(extensionBuffer.GetString(), extensionBuffer.GetSize());
+    }
+
+    // Close the files
+    outFileFilename.close();
+    outFileExtension.close();
+
+    // Unlock the mutex
+    count_mutex.unlock();
+
+    // Clear the list of files and folders after processing
+    filesNFolders.clear();
+
+    // Debug print to confirm execution reaches the end
+    cout << "Exiting writeBuffer" << endl;
 }
