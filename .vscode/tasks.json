@@ -10,9 +10,9 @@
                 "${file}",
                 "-o",
                 "${fileDirname}\\${fileBasenameNoExtension}.exe",
-                "C:\\Users\\josbu\\OneDrive\\Documents\\GitHub\\FastFile-File-Browser\\old_approach_json\\libraries\\simdjson.cpp",
+                "C:\\Users\\josbu\\OneDrive\\Documents\\GitHub\\FastFile-File-Browser\\libraries\\yyjson.c",
                 "-I",
-                "C:\\Users\\josbu\\OneDrive\\Documents\\GitHub\\FastFile-File-Browser\\old_approach_json\\libraries",
+                "C:\\Users\\josbu\\OneDrive\\Documents\\GitHub\\FastFile-File-Browser\\libraries",
             ],
             "options": {
                 "cwd": "${fileDirname}"

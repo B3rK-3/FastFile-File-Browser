@@ -1,7 +1,0 @@
-extFile size: 21,829KB
-jsonFile size: 25,259KB
-CPU usage: 6%
-Memory: 600MB
-
-
-Stream not implemented
