@@ -9,27 +9,26 @@
 using namespace std;
 namespace fs = filesystem;
 
-int main() {
-    string userSearch = "";
-    string searchDir = "";
+int main(int argc, char* argv[]) {
+    if (argc < 3) {
+        cerr << "Usage: file_searcher <directory_path> <search_term>" << endl;
+        return 1;
+    }
 
-    cout << "What is the path of the directory? >>";
-    getline(cin, searchDir);
-
-    cout << "\nWhat file to search for? Hint: put a `.` at the start to search for extension >>";
-    getline(cin, userSearch);
+    string searchDir = argv[1];
+    string userSearch = argv[2];
 
     bool extensionSearch = false;
     if (userSearch[0] == '.') {
         userSearch = userSearch.substr(1);
         extensionSearch = true;
     }
-    string file = extensionSearch ? "../extIndex.json" : "../fileIndex.json";
+    string file = extensionSearch ? "C:/Users/josbu/OneDrive/Documents/GitHub/test_app/extIndex.json" : "C:\\Users\\josbu\\OneDrive\\Documents\\GitHub\\test_app\\fileIndex.json";
 
     // Allocate a buffer for reading the file
     FILE* fp = fopen(file.c_str(), "rb");
     if (!fp) {
-        cerr << "Failed to open JSON file" << endl;
+        cerr << "Failed to open JSON file" << ' ' + file << endl;
         return 1;
     }
 
@@ -89,13 +88,11 @@ int main() {
         oldFind = newFind + 1;
         newFind = searchDir.find("/", oldFind);
     }
-    // WORKS TILL HERE
-    cout << userSearch << endl;
-    // BFS-like traversal to search for files/directories
+
     queue<tuple<yyjson_val*, string>> q;
-    vector<string> results;
     q.push(make_tuple(data, searchDir));
 
+    cout << "\n-----Results-----\n";
     while (!q.empty()) {
         auto [node, path] = q.front();
         q.pop();
@@ -117,7 +114,8 @@ int main() {
                 size_t arr_idx, arr_max;
 
                 yyjson_arr_foreach(value, arr_idx, arr_max, each) {
-                    results.push_back(path.substr(0, path.find_last_of('/')+1) + string(yyjson_get_str(each)));
+                    cout << path.substr(0, path.find_last_of('/')+1) + string(yyjson_get_str(each)) + '\n';
+                    cout.flush();
                 }
                 continue;
             }
@@ -136,12 +134,6 @@ int main() {
                 }
             }
         }
-    }
-asjhjdhdaso;fka;kasjdlfkmsdf09josjdflkahjsdlf093jwljkjkfhlskdjfl;aksdpfoi';sldkf-00k3kasdfjk309uaslkljf309jasddflk;j30asjdflkj3a-sdfjsdkfjlksadjf0jqrkspidjflakskndf;lkjasdlkfjflkjasdfl;kj
-    cout << "\n-----Results-----\n";
-    // Output the results
-    for (const auto& res : results) {
-        cout << res << endl;
     }
 
     // Clean up

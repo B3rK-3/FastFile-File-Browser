@@ -7,6 +7,7 @@
 #include <iostream>
 #include <mutex>
 #include <thread>
+#include <unordered_set>
 #include <vector>
 
 #include "../libraries/rapidjson/document.h"
@@ -28,14 +29,14 @@ mutex count_mutex;
 mutex indexer_mutex;
 
 // global limitations
-const long MAX_COUNT = 50000000;
-const int MAX_THREADS = 1;
-const int MaxSubFolderInMemory = 100000;
+const long MAX_COUNT = 200000;
+const int MAX_THREADS = 16;
+const int MaxSubFolderInMemory = 1000000;
 int COUNT = 0;
 
 // directories
 deque<fs::directory_entry> filesNFolders = {};
-vector<fs::path> ignoredDirectories = {R"(C:\Windows)", R"(C:\ProgramData)", R"(C:\DRIVER)", R"(C:\drivers)", R"(C:\$SysReset)", R"(C:\PerfLogs)", R"(C:\msys64)", R"(C:\vcpkg)", R"(C:\Program Files (x86)\AMD)", R"(C:\Program Files (x86)\Google)", R"(C:\Program Files (x86)\Internet Explorer)", R"(C:\Program Files (x86)\Lenovo)"};
+unordered_set<string> ignoredDirectories = {R"(C:\Windows)", R"(C:\ProgramData)", R"(C:\DRIVER)", R"(C:\drivers)", R"(C:\$SysReset)", R"(C:\PerfLogs)", R"(C:\msys64)", R"(C:\vcpkg)", R"(C:\Program Files (x86)\AMD)", R"(C:\Program Files (x86)\Google)", R"(C:\Program Files (x86)\Internet Explorer)", R"(C:\Program Files (x86)\Lenovo)"};
 vector<fs::path> directoriesToParse = {R"(C:\Users)"};
 
 bool ignoreDirectories = false;  // option to set if the directories should be ignored or parse only the selected directories
@@ -51,12 +52,9 @@ int main() {
             for (const auto &entry : fs::directory_iterator(root_path)) {
                 bool in = false;
                 // iterate the ignored directories vector =
-                for (auto &each : ignoredDirectories) {
-                    if (strcmp(each.string().c_str(), entry.path().string().c_str()) == 0) {
-                        in = true;
-                        break;
-                    }
-                }
+                if (ignoredDirectories.find(entry.path().string().c_str()) != ignoredDirectories.end()) {
+                    in = true;
+                };
 
                 // check if path is a fold and it is not in the ignoreDirectories vector
                 auto status = entry.status();
@@ -141,14 +139,9 @@ void helper(const vector<fs::path> &dirs) {
                     // bool for the path in ignoredDirectories
                     bool in = false;
                     // ---> process for ignoring the ignoredDirectories vector
-                    if (ignoreDirectories) {
-                        for (auto &each : ignoredDirectories) {
-                            if (strcmp(each.string().c_str(), entry.path().string().c_str()) == 0) {
-                                in = true;
-                                break;
-                            }
-                        }
-                    }
+                    if (ignoredDirectories.find(entry.path().string().c_str()) != ignoredDirectories.end()) {
+                        in = true;
+                    };
                     // <---->
 
                     // add path to the buffer to be written to the json later on
@@ -156,23 +149,26 @@ void helper(const vector<fs::path> &dirs) {
 
                     // if the has reached desired size write it to json
                     if (filesNFolders.size() >= MaxSubFolderInMemory) {
+                        cout << "Write Buffer, Count " << COUNT << ", FilesnFolders " << filesNFolders.size();
                         writeBuffer();
                     }
 
                     // DEBUGGING -- limiting the amount of files parsed for now for testing purposes
                     if (fs::is_directory(entry.status()) && !in) {
                         COUNT++;
+                        if (COUNT % 1000 == 0) cout << "Count: " << COUNT;
                         stack.push_back(entry.path());
                     }
 
                     if (COUNT >= MAX_COUNT) {
+                        cout << "Max Count passed!";
                         return;
                     }
                 }
             } catch (const fs::filesystem_error &e) {  // if the path cant be opened, skip it
                 continue;
             }
-            this_thread::sleep_for(chrono::nanoseconds(10000));
+            //this_thread::sleep_for(chrono::nanoseconds(10000));
         }
         stack.clear();
     }
